@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel Admin</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0d0d0d; color: #fff; margin: 0; padding: 20px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 750px; }
+    .card { background: #1a1a1a; padding: 1.5rem; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.6); }
+    h2, h3 { margin-top: 0; }
+    input, button { width: 100%; padding: 10px; margin: 6px 0; border-radius: 6px; border: 1px solid #333; box-sizing: border-box; font-size: 15px; }
+    input { background: #262626; color: #fff; }
+    button { background: #0070f3; color: #fff; font-weight: bold; border: none; cursor: pointer; }
+    button:hover { background: #005bb5; }
+    .btn-del { background: #d32f2f; width: auto; padding: 6px 12px; font-size: 13px; margin: 0; }
+    .btn-del:hover { background: #b71c1c; }
+    .btn-refresh { background: #333; width: auto; padding: 6px 12px; font-size: 13px; margin: 0; }
+    .msg { font-size: 14px; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #333; }
+    .online { color: #00e676; font-weight: bold; }
+    .expired { color: #ff4d4d; }
+    .offline { color: #888; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="card" id="login-admin">
+      <h2>Panel de Administración</h2>
+      <input type="password" id="admin-pass" placeholder="Clave de administrador (por defecto: admin1234)">
+      <button onclick="entrarAdmin()">Entrar</button>
+      <div class="msg" id="admin-error" style="color:#ff4d4d;"></div>
+    </div>
+
+    <div id="dashboard" style="display: none;">
+      <div class="card">
+        <h3>1. Configurar Enlace del Vídeo</h3>
+        <input type="text" id="video-url" placeholder="Enlace directo (.mp4), YouTube o Google Drive">
+        <button onclick="guardarVideo()">Guardar Vídeo</button>
+        <div class="msg" id="video-msg"></div>
+      </div>
+
+      <div class="card">
+        <h3>2. Crear Credenciales Temporales</h3>
+        <input type="text" id="new-user" placeholder="Usuario (ej. cliente1)">
+        <input type="text" id="new-pass" placeholder="Contraseña">
+        <input type="number" id="minutes" placeholder="Minutos de duración (ej. 30)">
+        <button onclick="crearUsuario()">Crear Acceso</button>
+        <div class="msg" id="user-msg"></div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h3>3. Usuarios Activos</h3>
+          <button class="btn-refresh" onclick="cargarDatos()">Actualizar</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Usuario</th>
+              <th>Clave</th>
+              <th>Restante</th>
+              <th>Estado</th>
+              <th>Acción</th>
+            </tr>
+          </thead>
+          <tbody id="users-list">
+            <tr><td colspan="5">Cargando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let masterPass = '';
+
+    async function callApi(action, payload = {}) {
+      const res = await fetch('/.netlify/functions/api', {
+        method: 'POST',
+        body: JSON.stringify({ adminPass: masterPass, action, ...payload })
+      });
+      return { ok: res.ok, data: await res.json() };
+    }
+
+    async function entrarAdmin() {
+      masterPass = document.getElementById('admin-pass').value;
+      const res = await callApi('admin_get');
+      if (!res.ok) {
+        document.getElementById('admin-error').textContent = res.data.error;
+        return;
+      }
+      document.getElementById('login-admin').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'block';
+      renderizar(res.data);
+    }
+
+    async function cargarDatos() {
+      const res = await callApi('admin_get');
+      if (res.ok) renderizar(res.data);
+    }
+
+    function renderizar(data) {
+      document.getElementById('video-url').value = data.videoUrl || '';
+      const tbody = document.getElementById('users-list');
+      tbody.innerHTML = '';
+
+      if (!data.users || data.users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5">No hay usuarios creados.</td></tr>';
+        return;
+      }
+
+      data.users.forEach(u => {
+        const now = Date.now();
+        const minsLeft = Math.ceil((u.expiresAt - now) / 60000);
+        let estado = '<span class="offline">Sin conectar</span>';
+        let tiempo = `${minsLeft} min`;
+
+        if (minsLeft <= 0) {
+          estado = '<span class="expired">Caducado</span>';
+          tiempo = '0 min';
+        } else if (u.activeToken && (now - u.lastPing < 15000)) {
+          estado = '<span class="online">Viendo ahora</span>';
+        }
+
+        tbody.innerHTML += `
+          <tr>
+            <td><strong>${u.username}</strong></td>
+            <td>${u.password}</td>
+            <td>${tiempo}</td>
+            <td>${estado}</td>
+            <td><button class="btn-del" onclick="borrarUsuario('${u.username}')">Revocar</button></td>
+          </tr>
+        `;
+      });
+    }
+
+    async function guardarVideo() {
+      const videoUrl = document.getElementById('video-url').value.trim();
+      const msg = document.getElementById('video-msg');
+      const res = await callApi('admin_set_video', { videoUrl });
+      msg.textContent = res.ok ? 'Vídeo actualizado correctamente.' : res.data.error;
+      msg.style.color = res.ok ? '#00e676' : '#ff4d4d';
+    }
+
+    async function crearUsuario() {
+      const username = document.getElementById('new-user').value.trim();
+      const password = document.getElementById('new-pass').value.trim();
+      const minutes = parseInt(document.getElementById('minutes').value);
+      const msg = document.getElementById('user-msg');
+
+      if (!username || !password || !minutes || minutes <= 0) {
+        msg.textContent = 'Rellena todos los campos correctamente.';
+        msg.style.color = '#ff4d4d';
+        return;
+      }
+
+      const res = await callApi('admin_create_user', { username, password, minutes });
+      msg.textContent = res.ok ? `Usuario "${username}" creado por ${minutes} min.` : res.data.error;
+      msg.style.color = res.ok ? '#00e676' : '#ff4d4d';
+
+      if (res.ok) {
+        document.getElementById('new-user').value = '';
+        document.getElementById('new-pass').value = '';
+        document.getElementById('minutes').value = '';
+        cargarDatos();
+      }
+    }
+
+    async function borrarUsuario(username) {
+      if (!confirm(`¿Eliminar el acceso de ${username}?`)) return;
+      await callApi('admin_delete_user', { username });
+      cargarDatos();
+    }
+  </script>
+</body>
+</html>
